@@ -1,0 +1,5 @@
+# Midnight Commander
+
+# uc2
+regex/\.(uc2|UC2)$
+	Open=%cd %p/uuc2://

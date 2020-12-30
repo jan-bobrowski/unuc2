@@ -1,0 +1,44 @@
+#!/bin/bash
+# Midnight Commander
+
+process='
+BEGIN {
+	FS = "\t"
+}
+
+NF > 1 {
+	attr = $1 #adLSHR
+	date = $2
+	size = $3
+	name = $4
+	l = "rw"
+	if(attr ~ /^.....R$/)
+		l = "r-"
+	if(attr ~ /^.d....$/) {
+		l = l "x"
+		l = "d" l l "r-x 2 "
+	} else {
+		l = l "-"
+		l = "-" l l "r-- 1 "
+	}
+	if(attr ~ /^...S..$/)
+		l = l "root root "
+	else
+		l = l "user user "
+	l = l (size ? size : 0) " "
+	if (date) {
+		split(date, a, /[- ]/)
+		l = l a[3] "-" a[2] "-" a[1] " " (a[4] ? a[4] : "00:00")
+	} else {
+		l = l "01-01-1980 00:00"
+	}
+	l = l " " name
+	if($5) l = l ";" $5
+	print l
+}'
+
+case "$1" in
+ list) unuc2 -laT -- "$2" | awk "$process" ;;
+ copyout) unuc2 -p -- "$2" "$3" >"$4" ;;
+ *) exit 1
+esac
