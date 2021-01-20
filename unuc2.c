@@ -1,5 +1,5 @@
 /* UltraCompressor II extraction tool.
-   Copyright © Jan Bobrowski 2020
+   Copyright © Jan Bobrowski 2020, 2021
    torinak.com/~jb/unuc2/
 
    This program is free software: you can redistribute it and modify
@@ -23,8 +23,6 @@
 #include <errno.h>
 #include <err.h>
 #include <assert.h>
-
-#include <sys/types.h>
 #include <sys/stat.h>
 
 #include "libunuc2.h"
@@ -57,10 +55,7 @@ static int my_read(void *ctx, unsigned pos, void *ptr, unsigned len)
 
 static void *my_alloc(void *ctx, unsigned size)
 {
-	void *p = malloc(size);
-	if (p)
-		memset(p, 0, size);
-	return p;
+	return malloc(size);
 }
 
 static void my_free(void *ctx, void *ptr)
@@ -97,8 +92,8 @@ static struct uc2_io io = {
 	.warn = my_warn
 };
 
-LIST(files);
-LIST(dirs);
+struct list files;
+struct list dirs;
 
 struct node {
 	struct list by_type;
@@ -145,8 +140,8 @@ static void new_entry(struct node *ne)
 			}
 		}
 	}
-	list_add_end(at ? at : &dir->children, &ne->on_dir);
-	list_add_end(e->is_dir ? &dirs : &files, &ne->by_type);
+	list_append(at ? at : &dir->children, &ne->on_dir);
+	list_append(e->is_dir ? &dirs : &files, &ne->by_type);
 	list_init(&ne->children);
 	list_init(&ne->on_sel);
 	ne->version = 0;
@@ -179,17 +174,17 @@ static void print_time(unsigned t)
 		printf("%*s", 19 - w, "");
 }
 
-static void mark(struct node *node)
+static void mark(struct node *node, bool visit)
 {
 	if (node->marked)
 		return;
 	node->marked = true;
-	if (node->entry.is_dir) {
+	if (visit) {
 		node->visit = true;
 		for (struct list *l = node->children.next; l != &node->children; l = l->next) {
 			struct node *ne = list_item(l, struct node, on_dir);
 			if (opt.all || ne->version == 0)
-				mark(ne);
+				mark(ne, true);
 		}
 	}
 	while ((node = node->parent) && !node->visit)
@@ -209,7 +204,7 @@ static void match_pattern(char *p)
 	unsigned version = 0;
 	for (;;) {
 		char *q = strchr(p, '/');
-		int mode = IntermediateDirs;
+		int mode;
 		if (!q) {
 			mode = FilesAndSpecificDirs;
 			q = strchr(p, 0);
@@ -221,31 +216,33 @@ static void match_pattern(char *p)
 				}
 			}
 		} else {
+			mode = IntermediateDirs;
 			*q = 0;
 			if (!q[1])
 				mode = Dirs;
 		}
 		struct list sentinel;
-		list_add_end(&selected, &sentinel);
+		list_append(&selected, &sentinel);
 		while (selected.next != &sentinel) {
-			struct node *dir = list_get_item(&selected, struct node, on_sel);
+			struct node *dir = list_item(selected.next, struct node, on_sel);
+			list_del(&dir->on_sel);
 			for (struct list *l = dir->children.next; l != &dir->children; l = l->next) {
 				struct node *ne = list_item(l, struct node, on_dir);
 				if (!ne->entry.is_dir) {
 					if (mode == FilesAndSpecificDirs
 					 && ne->version == version && fnmatch(p, ne->entry.name, 0) == 0)
-						mark(ne);
+						mark(ne, false);
 					continue;
 				}
 				if (mode == IntermediateDirs) {
 					list_del(&ne->on_sel);
 					if (fnmatch(p, ne->entry.name, 0) == 0)
-						list_add_end(&selected, &ne->on_sel);
+						list_append(&selected, &ne->on_sel);
 					continue;
 				}
 				if (strcmp(ne->entry.name, p) == 0
-				 || (mode == Dirs && fnmatch(p, ne->entry.name, 0) == 0))
-					mark(ne);
+				 || (fnmatch(p, ne->entry.name, 0) == 0))
+					mark(ne, mode == Dirs);
 			}
 		}
 		list_del(&sentinel);
@@ -339,7 +336,7 @@ static bool max_size_cb(struct node *ne, void *ctx, enum cause cause)
 
 static bool print_entry_cb(struct node *ne, void *ctx, enum cause cause)
 {
-	if (cause == VisitFile) {
+	if (ne->marked && cause != LeaveDir) {
 		int size_w = *(int*)ctx;
 		print_entry(ne, size_w);
 	}
@@ -370,10 +367,10 @@ static void set_attrs(char *path, struct node *ne)
 		(void)chmod(path, 0444);
 }
 
-static int write_file(void *context, unsigned pos, const void *ptr, unsigned len)
+static int write_file(void *file, const void *ptr, unsigned len)
 {
-	if (context)
-		if (fwrite(ptr, 1, len, context) < len)
+	if (file)
+		if (fwrite(ptr, 1, len, file) < len)
 			return -1;
 	return 0;
 }
@@ -415,8 +412,7 @@ static bool extract_cb(struct node *ne, void *ctx, enum cause cause)
 		if (cause == VisitFile) {
 			*p = 0;
 			if (!opt.overwrite) {
-				struct stat st;
-				if (stat(path->buffer, &st) >= 0) {
+				if (access(path->buffer, F_OK) == 0) {
 					errno = EEXIST;
 					warn("%s", path->buffer);
 					break;
@@ -541,24 +537,44 @@ usage:
 
 	uc2_handle uc2 = uc2_open(&io, f);
 
+	list_init(&files);
+	list_init(&dirs);
+
 	for (;;) {
 		struct node *ne = malloc(sizeof *ne);
 		if (!ne) err(EXIT_FAILURE, "malloc");
 
-		int ret = uc2_scan(uc2, &ne->entry, 0);
+		int ret = uc2_read_cdir(uc2, &ne->entry);
 		if (ret <= 0) {
 			free(ne);
-			if (ret == 0)
+			if (ret == UC2_End)
 				break;
 			uc2err(uc2, ret, 0);
 			return EXIT_FAILURE;
+		}
+		while (ret == UC2_TaggedEntry) {
+			char tag[16];
+			ret = uc2_get_tag_header(uc2, tag);
+			if (ret < 0) {
+				uc2err(uc2, ret, 0);
+				return EXIT_FAILURE;
+			}
+			char data[ret];
+			ret = uc2_get_tag_data(uc2, &ne->entry, data);
+			if (ret < 0) {
+				uc2err(uc2, ret, 0);
+				return EXIT_FAILURE;
+			}
 		}
 
 		new_entry(ne);
 	}
 
+	char label[12];
+	uc2_finish_cdir(uc2, label);
+
 	if (optind == argc) {
-		mark(&root);
+		mark(&root, true);
 	} else do {
 		match_pattern(argv[optind++]);
 	} while (optind < argc);
@@ -572,8 +588,8 @@ usage:
 		}
 		visit_selected(&root, print_entry_cb, &size_w);
 		if (opt.sep == ' ') {
-			const char *s = uc2_label(uc2);
-			if (s) printf("Label: %s\n", s);
+			if (*label)
+				printf("Label: %s\n", label);
 		}
 	}
 
@@ -583,7 +599,7 @@ usage:
 		struct path path = {.uc2 = uc2};
 		char *p = path.buffer;
 		if (opt.dest) {
-			int n = strlen(opt.dest);
+			unsigned n = strlen(opt.dest);
 			assert(n);
 			if (opt.dest[n-1] == '/')
 				n--;

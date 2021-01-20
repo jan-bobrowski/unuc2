@@ -1,13 +1,18 @@
 #ifndef LIBUNUC2_H
 #define LIBUNUC2_H
+#ifndef UC2_API
+#define UC2_API
+#endif
 
 /* API
  uc2_identify - check UC2 magic
  uc2_open - initialize
- uc2_scan - read dir entry
+ uc2_read_cdir - read dir entry
+ uc2_get_tag_header - read tag header of the entry
+ uc2_get_tag_data - read tag data
+ uc2_finish_cdir - get archive label
  uc2_extract - decompress file
  uc2_message - get error message
- uc2_label - get archive label
  uc2_close - free resources
 */
 
@@ -16,29 +21,54 @@ struct uc2_entry;
 struct uc2_context;
 typedef struct uc2_context *uc2_handle;
 
-int uc2_identify(void *magic, unsigned magic_size /* 4..21 */);
-uc2_handle uc2_open(struct uc2_io *io, void *io_ctx);
-uc2_handle uc2_close(uc2_handle);
+UC2_API int uc2_identify(void *magic, unsigned magic_size /* 4..21 */);
+UC2_API uc2_handle uc2_open(struct uc2_io *io, void *io_ctx);
+UC2_API uc2_handle uc2_close(uc2_handle);
 
-typedef int (*uc2_tag_callback)(char tag[16], const void *data, unsigned size, struct uc2_entry *);
-
-/* Get cdir entry. Returns 0 when no more. Negative value indicates an error.
+/* Get cdir entry. Pass NULL to skip the rest. Returns:
+     UC2_End: The end, entry not filled,
+     UC2_BareEntry: New entry filled, no tags,
+     UC2_TaggedEntry: New entry filled, has tags (must call uc2_get_tag_header),
+     Negative value on error.
    Directories come before content. Duplicates: older first. */
-int uc2_scan(
+UC2_API int uc2_read_cdir(
 	uc2_handle,
-	struct uc2_entry *e, // Entry to fill. Pass NULL to finish early.
-	uc2_tag_callback // May be null.
+	struct uc2_entry *e // Entry to fill. Pass NULL to finish early.
 );
 
-int uc2_extract(
+enum {
+	UC2_End = 0,
+	UC2_BareEntry = 1,
+	UC2_TaggedEntry = 3
+};
+
+/* Returns size of tag data to read, or negative on error */
+UC2_API int uc2_get_tag_header(
+	uc2_handle,
+	char tag[16] /* filled */
+);
+
+/* If there are more tags returns UC2_TaggedEntry, else UC2_End, or an error */
+UC2_API int uc2_get_tag_data(
+	uc2_handle,
+	struct uc2_entry *e, /* to fill name */
+	void *data /* filled */
+);
+
+UC2_API int uc2_cdir_finish(
+	uc2_handle,
+	char label[12]
+);
+
+UC2_API int uc2_extract(
 	uc2_handle,
 	struct uc2_entry *e,
-	int (*write)(void *context, unsigned pos, const void *ptr, unsigned len),
+	int (*write)(void *context, const void *ptr, unsigned len),
 	void *context
 );
 
-const char *uc2_message(uc2_handle, int ret);
-const char *uc2_label(uc2_handle);
+UC2_API int uc2_finish_cdir(uc2_handle, char label[12]);
+UC2_API const char *uc2_message(uc2_handle, int ret);
 
 struct uc2_io {
 	/* Read len bytes from the archive at offset pos into buf.
