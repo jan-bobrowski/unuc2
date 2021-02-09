@@ -101,7 +101,7 @@ struct node {
 	struct list on_sel;
 	struct list children; // head
 	struct node *parent;
-	unsigned version;
+	int version;
 	bool visit:1;
 	bool marked:1;
 	struct uc2_entry entry;
@@ -201,18 +201,23 @@ static void match_pattern(char *p)
 	struct list selected;
 	list_init(&selected);
 	list_add(&selected, &root.on_sel);
-	unsigned version = 0;
+	int version = opt.all ? -1 : 0;
 	for (;;) {
 		char *q = strchr(p, '/');
 		int mode;
 		if (!q) {
 			mode = FilesAndSpecificDirs;
 			q = strchr(p, 0);
-			if (q - p > 2 && isdigit(q[-1])) {
-				do q--; while (q - p > 2 && isdigit(q[-1]));
-				if (q[-1] == ';') {
-					q[-1] = 0;
-					version = atoi(q);
+			if (q - p > 2) {
+				if (memcmp(q - 2, ";*", 2) == 0) {
+					version = -1;
+					q[-2] = 0;
+				} else if(isdigit(q[-1])) {
+					do q--; while (q - p > 2 && isdigit(q[-1]));
+					if (q[-1] == ';') {
+						q[-1] = 0;
+						version = atoi(q);
+					}
 				}
 			}
 		} else {
@@ -230,7 +235,8 @@ static void match_pattern(char *p)
 				struct node *ne = list_item(l, struct node, on_dir);
 				if (!ne->entry.is_dir) {
 					if (mode == FilesAndSpecificDirs
-					 && ne->version == version && fnmatch(p, ne->entry.name, 0) == 0)
+					 && (version < 0 || ne->version == version)
+					 && fnmatch(p, ne->entry.name, 0) == 0)
 						mark(ne, false);
 					continue;
 				}
@@ -388,7 +394,7 @@ static bool pipe_cb(struct node *ne, void *ctx, enum cause cause)
 		struct uc2_entry *e = &ne->entry;
 		if (opt.test)
 			printf("Testing %s %u bytes\n", e->name, e->size);
-		int ret = uc2_extract(uc2, e, write_file, opt.test ? 0 : stdout);
+		int ret = uc2_extract(uc2, &e->xi, e->size, write_file, opt.test ? 0 : stdout);
 		if (ret < 0)
 			uc2err(uc2, ret, "(%s)", e->name);
 	}
@@ -423,7 +429,7 @@ static bool extract_cb(struct node *ne, void *ctx, enum cause cause)
 			FILE *f = fopen(path->buffer, "wb");
 			if (!f)
 				err(EXIT_FAILURE, "%s", path->buffer);
-			int ret = uc2_extract(path->uc2, e, write_file, f);
+			int ret = uc2_extract(path->uc2, &e->xi, e->size, write_file, f);
 			if (ret < 0)
 				uc2err(path->uc2, ret, "(%s)", e->name);
 			fclose(f);
@@ -514,14 +520,14 @@ usage:
 				printf("unuc2 -h\n");
 			else
 				printf(
-					" -l      list\n"
-					" -t      test\n"
-					" -a      all versions of files\n"
-					" -d path destination to extract to\n"
-					" -f      overwrite\n"
-					" -p      to stdout\n"
-					" -D      do not set time and permissions of dirs (also files: -DD)\n"
-					" -T      tab separated\n"
+					" -l      List\n"
+					" -t      Test\n"
+					" -a      All versions of files\n"
+					" -d path Destination to extract to\n"
+					" -f      Overwrite\n"
+					" -p      To stdout\n"
+					" -D      Do not set time and permissions of dirs (also files: -DD)\n"
+					" -T      Tab separated\n"
 					"\nhttp://torinak.com/~jb/unuc2/\n"
 				);
 			return opt.help ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -542,7 +548,7 @@ usage:
 
 	for (;;) {
 		struct node *ne = malloc(sizeof *ne);
-		if (!ne) err(EXIT_FAILURE, "malloc");
+		if (!ne) err(EXIT_FAILURE, 0);
 
 		int ret = uc2_read_cdir(uc2, &ne->entry);
 		if (ret <= 0) {
@@ -552,9 +558,10 @@ usage:
 			uc2err(uc2, ret, 0);
 			return EXIT_FAILURE;
 		}
+
 		while (ret == UC2_TaggedEntry) {
 			char tag[16];
-			ret = uc2_get_tag_header(uc2, tag);
+			ret = uc2_get_tag_header(uc2, &ne->entry, tag);
 			if (ret < 0) {
 				uc2err(uc2, ret, 0);
 				return EXIT_FAILURE;

@@ -1,7 +1,7 @@
 # gmake
 
 NAME = unuc2
-VERSION = 0.2
+VERSION = 0.3
 BINDIR = /usr/local/bin
 
 CFLAGS += -DNDEBUG -Os
@@ -21,11 +21,8 @@ $(O)libunuc2.so: libunuc2.c $(O)super.o
 $(O)libunuc2.o: libunuc2.c Makefile list.h libunuc2.h $(DEPS)
 	$(CC) -c $(CFLAGS) $< -o $@
 
-sym = uc2_supermaster_compressed
-$(O)super.o: super.bin
-	$(LD) -r -b binary $< -o $@ \
-	 --defsym=$(sym)=_binary_super_bin_start --defsym=$(sym)_end=_binary_super_bin_end \
-	 --defsym=_$(sym)=_binary_super_bin_start --defsym=_$(sym)_end=_binary_super_bin_end
+$(O)super.o: super.S super.bin
+	$(CC) -c $(CFLAGS) $< -o $@
 
 $(O)unuc2.o: unuc2.c Makefile
 	$(CC) -c $(CFLAGS) $< -o $@

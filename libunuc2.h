@@ -16,8 +16,9 @@
  uc2_close - free resources
 */
 
-struct uc2_io;  // User callbacks.
-struct uc2_entry;
+struct uc2_io;     // User callbacks
+struct uc2_xinfo;  // Extraction info
+struct uc2_entry;  // CDir entry
 struct uc2_context;
 typedef struct uc2_context *uc2_handle;
 
@@ -33,26 +34,21 @@ UC2_API uc2_handle uc2_close(uc2_handle);
    Directories come before content. Duplicates: older first. */
 UC2_API int uc2_read_cdir(
 	uc2_handle,
-	struct uc2_entry *e // Entry to fill. Pass NULL to finish early.
+	struct uc2_entry * // Entry to fill. Pass NULL to finish early.
 );
-
-enum {
-	UC2_End = 0,
-	UC2_BareEntry = 1,
-	UC2_TaggedEntry = 3
-};
 
 /* Returns size of tag data to read, or negative on error */
 UC2_API int uc2_get_tag_header(
 	uc2_handle,
-	char tag[16] /* filled */
+	struct uc2_entry *, // to fill name, if skipping tags
+	char tag[16] // to fill, pass NULL to skip tags
 );
 
 /* If there are more tags returns UC2_TaggedEntry, else UC2_End, or an error */
 UC2_API int uc2_get_tag_data(
 	uc2_handle,
-	struct uc2_entry *e, /* to fill name */
-	void *data /* filled */
+	struct uc2_entry *, // to fill name
+	void *data // to fill, not NULL
 );
 
 UC2_API int uc2_cdir_finish(
@@ -60,9 +56,12 @@ UC2_API int uc2_cdir_finish(
 	char label[12]
 );
 
+/* Allowed only after whole cdir has been read.
+   write() should return <0 on error. */
 UC2_API int uc2_extract(
 	uc2_handle,
-	struct uc2_entry *e,
+	struct uc2_xinfo *,
+	unsigned size,
 	int (*write)(void *context, const void *ptr, unsigned len),
 	void *context
 );
@@ -72,13 +71,15 @@ UC2_API const char *uc2_message(uc2_handle, int ret);
 
 struct uc2_io {
 	/* Read len bytes from the archive at offset pos into buf.
-	   Return number of bytes read, or less if eof. Negative value indicates an error. */
+	   Return number of bytes read, or less if eof.
+	   Negative value indicates an error. */
 	int (*read)(void *io_ctx, unsigned pos, void *buf, unsigned len);
 
 	/* Allocate memory. Return NULL on error */
 	void *(*alloc)(void *io_ctx, unsigned size);
 	void (*free)(void *io_ctx, void *ptr);
 
+	/* Optional */
 	void (*warn)(void *io_ctx, char *fmt, ...);
 };
 
@@ -91,21 +92,30 @@ enum {
 	UC2_InternalError = -7
 };
 
+enum {
+	UC2_End = 0,
+	UC2_BareEntry = 1,
+	UC2_TaggedEntry = 3
+};
+
+struct uc2_xinfo {
+	unsigned offset, master;
+	unsigned short csum, method;
+};
+
 struct uc2_entry {
 	unsigned dirid; // Directory it belongs to. Root is 0.
 	unsigned id; // dir only
-	unsigned char attr;
+	struct uc2_xinfo xi;
 	unsigned size;  // file only
 	unsigned csize; // file only
 	unsigned dos_time;
 	unsigned char is_dir:1;
 	unsigned char has_tags:1;
+	unsigned char attr;
 	unsigned char dos_name[11]; // not terminated
 	unsigned short name_len;
-	char name[300];
-
-	unsigned offset, master; // for decompression
-	unsigned short csum, method;
+	char name[300]; // ready after tags have been read
 };
 
 enum {

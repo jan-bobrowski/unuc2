@@ -2,6 +2,7 @@
 
 #ifndef LIST_H
 #define LIST_H
+#include <stddef.h>
 
 typedef struct list {
 	struct list *next, *prev;
@@ -56,7 +57,7 @@ static inline int list_is_empty(struct list *head)
 }
 #define list_empty(H) list_is_empty(H)
 
-#define list_item(L, T, M) ((T*)((char*)(L) - ((char*)&((T*)0)->M - (char*)0)))
+#define list_item(L, T, M) ((T*)((char*)(1?(L):&((T*)0)->M) - offsetof(T,M)))
 
 /* remove first element and return it */
 static inline struct list *list_get(struct list *head)

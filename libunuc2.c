@@ -17,7 +17,7 @@
 
 #include "libunuc2.h"
 
-#ifndef NDEBUG
+#if !defined NDEBUG && !defined NDIAG
 #include <stdio.h>
 static int midl;
 static void diag(char *fnm, int lin, char *fmt, ...)
@@ -297,7 +297,7 @@ struct user_write_ctx {
 static int user_write(void *context, const void *buffer, unsigned size)
 {
 	struct user_write_ctx *uc = context;
-	return uc->write(uc->context, buffer, size);
+	return uc->write(uc->context, buffer, size) < 0 ? UC2_UserFault : 0;
 }
 
 /* bits */
@@ -676,7 +676,7 @@ static int resolve_master(struct uc2_context *uc2, unsigned master)
 	return 0;
 }
 
-static int use_master(struct uc2_context *uc2, u8 buffer[49152], u32 id)
+static int use_master(struct uc2_context *uc2, u8 buffer[65535], u32 id)
 {
 	int size;
 
@@ -696,14 +696,15 @@ static int use_master(struct uc2_context *uc2, u8 buffer[49152], u32 id)
 	default:
 		diag("Using master %d\n", id);
 		struct master_info *mi = find_master(uc2, id);
-		assert(mi);
+		assert(mi); // Wev'e fetched it already
 		assert(mi->data);
+		assert(mi->size <= 65535);
 		size = mi->size;
 		if (buffer)
 			memcpy(buffer, mi->data, size);
 	}
 
-	diag("Result master len:%u\n", size);
+	diag("Master %d len:%u\n", id, size);
 	return size;
 }
 
@@ -745,17 +746,10 @@ int uc2_read_cdir(struct uc2_context *uc2, struct uc2_entry *e)
 				uc2->cdir_state = AtTag;
 			if (e)
 				return ret;
-			// Skip tags
-			while (ret == UC2_TaggedEntry) {
-				char tag[16];
-				ret = uc2_get_tag_header(uc2, tag);
-				if (ret < 0)
-					return ret;
-				char data[ret];
-				ret = uc2_get_tag_data(uc2, 0, data);
-				if (ret < 0)
-					return ret;
-			}
+
+			ret = uc2_get_tag_header(uc2, 0, 0); // Skip tags
+			if (ret < 0)
+				return ret;
 			break;
 
 		case MasterEntry:;
@@ -873,20 +867,20 @@ static int read_entry(struct uc2_context *uc2, struct uc2_entry *e, u8 type)
 			struct {
 				REC(DIRMETA) m;
 			} d;
-		};
+		} u;
 	} rc;
 
 	struct reader rd = {.read = fifo_read, .context = uc2};
-	unsigned sz = sizeof rc.m + (type == FileEntry ? sizeof rc.f : sizeof rc.d);
+	unsigned sz = sizeof rc.m + (type == FileEntry ? sizeof rc.u.f : sizeof rc.u.d);
 	int ret = read_all(&rd, &rc, sz);
 	if (ret < 0)
 		return ret;
 
 	diag("%X %08X [%.11s] ", type, get32(rc.m.parent), rc.m.name);
 	if (type == FileEntry) diag("(C:%-3u M:%-2u O:%-5X) %7d %7d\n",
-	 get16(rc.f.c.method), get32(rc.f.c.masterPrefix), get32(rc.f.l.offset),
-	 get32(rc.f.m.length), get32(rc.f.c.compressedLength));
-	else diag("%08X\n", get32(rc.d.m.index));
+	 get16(rc.u.f.c.method), get32(rc.u.f.c.masterPrefix), get32(rc.u.f.l.offset),
+	 get32(rc.u.f.m.length), get32(rc.u.f.c.compressedLength));
+	else diag("%08X\n", get32(rc.u.d.m.index));
 
 	if (e) {
 		e->dirid = get32(rc.m.parent);
@@ -894,49 +888,62 @@ static int read_entry(struct uc2_context *uc2, struct uc2_entry *e, u8 type)
 		e->attr = rc.m.attrib;
 		if (type == FileEntry) {
 			e->id = 0;
-			e->size = get32(rc.f.m.length);
-			e->csum = get16(rc.f.m.fletch);
-			e->csize = get32(rc.f.c.compressedLength);
-			if (get32(rc.f.l.volume) != 1)
+			e->size = get32(rc.u.f.m.length);
+			e->csize = get32(rc.u.f.c.compressedLength);
+			if (get32(rc.u.f.l.volume) != 1)
 				return UC2_Unimplemented;
-			e->offset = get32(rc.f.l.offset);
-			e->method = get16(rc.f.c.method);
-			e->master = get32(rc.f.c.masterPrefix);
+			e->xi.offset = get32(rc.u.f.l.offset);
+			e->xi.master = get32(rc.u.f.c.masterPrefix);
+			e->xi.csum = get16(rc.u.f.m.fletch);
+			e->xi.method = get16(rc.u.f.c.method);
 			e->is_dir = 0;
 		} else {
-			e->id = get32(rc.d.m.index);
+			e->id = get32(rc.u.d.m.index);
 			e->size = e->csize = 0;
-			e->offset = e->method = e->master = 0;
+			e->xi = (struct uc2_xinfo){0};
 			e->is_dir = 1;
 		}
 		e->has_tags = !!rc.m.tag;
 		copy_dos_name(e->dos_name, rc.m.name);
-		e->name_len = 0;
+		e->name_len = 0; // we'll fill the name later
 		if (!e->has_tags)
 			assemble_name(e);
 	}
 	return rc.m.tag ? UC2_TaggedEntry : UC2_BareEntry;
 }
 
-int uc2_get_tag_header(struct uc2_context *uc2, char tag[16])
+int uc2_get_tag_header(struct uc2_context *uc2, struct uc2_entry *e, char tag[16])
 {
 	if (uc2->cdir_state != AtTag)
 		return UC2_UserFault;
 
-	REC(EXTMETA) x;
-	struct reader rd = {.read = fifo_read, .context = uc2};
-	int ret = read_all(&rd, &x, sizeof x);
-	if (ret < 0)
-		return ret;
-	unsigned size = get32(x.size);
-	if (size > 1000000)
-		return cdir_damaged(uc2);
-	memcpy(tag, x.tag, 16);
-	uc2->tag_size = size;
-	uc2->cdir_state = AtTagData
-	 | (memcmp(x.tag, TAG_LONGNAME, sizeof TAG_LONGNAME) == 0 ? LongNameTag : 0)
-	 | (x.next ? 0 : LastTag);
-	return size;
+	char tag_buf[16];
+	if (!tag)
+		tag = tag_buf;
+
+	for (;;) {
+		REC(EXTMETA) x;
+		struct reader rd = {.read = fifo_read, .context = uc2};
+		int ret = read_all(&rd, &x, sizeof x);
+		if (ret < 0)
+			return ret;
+		unsigned size = get32(x.size);
+		if (size > 1000000)
+			return cdir_damaged(uc2);
+		memcpy(tag, x.tag, 16);
+		uc2->tag_size = size;
+		uc2->cdir_state = AtTagData
+		 | (memcmp(x.tag, TAG_LONGNAME, sizeof TAG_LONGNAME) == 0 ? LongNameTag : 0)
+		 | (x.next ? 0 : LastTag);
+
+		if (tag != tag_buf)
+			return size;
+
+		char data[size];
+		ret = uc2_get_tag_data(uc2, e, data);
+		if (ret != UC2_TaggedEntry)
+			return ret;
+	}
 }
 
 int uc2_get_tag_data(struct uc2_context *uc2, struct uc2_entry *e, void *data)
@@ -989,11 +996,14 @@ int uc2_finish_cdir(struct uc2_context *uc2, char label[12])
 	ret = read_all(&rd, &t, sizeof t);
 	if (ret < 0)
 		return ret;
-	u8 *p = memchr(t.xtail.label, 0, 11);
-	if (!p) p = t.xtail.label + 11;
-	while (p > t.xtail.label && p[-1] == ' ') p--;
-	memcpy(label, t.xtail.label, p - t.xtail.label);
-	label[p - t.xtail.label] = 0;
+
+	if (label) {
+		u8 *p = memchr(t.xtail.label, 0, 11);
+		if (!p) p = t.xtail.label + 11;
+		while (p > t.xtail.label && p[-1] == ' ') p--;
+		memcpy(label, t.xtail.label, p - t.xtail.label);
+		label[p - t.xtail.label] = 0;
+	}
 
 	cdir_fifo_destroy(uc2);
 	uc2->cdir_state = Initial;
@@ -1067,62 +1077,31 @@ static void delta_revert(struct delta *db, u8 *dst, const u8 *src, unsigned size
 	*db = d;
 }
 
-#define DELTA_WRITER_BUFSZ 65536
-struct delta_writer_ctx {
-	struct writer *old_wr;
-	struct delta delta;
-	u8 *buf;
-};
-
-static int delta_writer_init(struct uc2_context *uc2, struct delta_writer_ctx *dw, struct writer *wr, unsigned delta)
-{
-	dw->buf = u_alloc(uc2, DELTA_WRITER_BUFSZ);
-	if (!dw->buf) return UC2_UserFault;
-	dw->old_wr = wr;
-	delta_init(&dw->delta, delta);
-	return 0;
-}
-
-static void delta_writer_destroy(struct uc2_context *uc2, struct delta_writer_ctx *dw)
-{
-	dw->buf = u_free(uc2, dw->buf);
-}
-
-static int delta_write(void *context, const void *buffer, unsigned size)
-{
-	if (!size) return 0;
-	struct delta_writer_ctx *dw = context;
-	if (size > DELTA_WRITER_BUFSZ)
-		return UC2_InternalError;
-	delta_revert(&dw->delta, dw->buf, buffer, size);
-	return dw->old_wr->write(dw->old_wr->context, dw->buf, size);
-}
-
 /* extract */
 
 int uc2_extract(
 	struct uc2_context *uc2,
-	struct uc2_entry *e,
+	struct uc2_xinfo *xi,
+	unsigned size,
 	int (*write)(void *context, const void *ptr, unsigned len),
 	void *context)
 {
 	int ret;
 
-	diag("Extracting %s %u bytes\n", e->name, e->size);
 	if (!uc2->scanned)
 		return UC2_BadState;
-	ret = resolve_master(uc2, e->master);
+	ret = resolve_master(uc2, xi->master);
 	if (ret < 0)
 		return ret;
 
-	struct archive_ctx ar = {.offset=e->offset, .uc2 = uc2};
+	struct archive_ctx ar = {.offset=xi->offset, .uc2 = uc2};
 	struct reader rd = {.read = archive_read, .context = &ar};
 	struct user_write_ctx uw_ctx = {.write=write, .context=context};
 	struct writer wr = {.write = user_write, .context = &uw_ctx};
 	u16 csum;
-	ret = decompressor(uc2, e->method, &rd, &wr, e->master, e->size, &csum);
-	diag("decompressor ret:%d csum:%04X (expected:%04X)\n", ret, csum, e->csum);
-	if (ret >= 0 && csum != e->csum)
+	ret = decompressor(uc2, xi->method, &rd, &wr, xi->master, size, &csum);
+	diag("decompressor ret:%d csum:%04X (expected:%04X)\n", ret, csum, xi->csum);
+	if (ret >= 0 && csum != xi->csum)
 		ret = UC2_Damaged;
 	return ret;
 }
@@ -1138,29 +1117,23 @@ static int decompressor(struct uc2_context *uc2, int method, struct reader *rd, 
 
 	diag("Decompressor method:%d master:%X\n", method, master);
 	if (method >= 1 && method <= 9) {
-		ret = decompressor_ultra(uc2, master, 0, rd, wr, len, csum);
+		delta = 0;
+ultra:
+		if(delta) diag("Using delta %d\n", delta);
+		ret = decompressor_ultra(uc2, master, delta, rd, wr, len, csum);
 	} else if (method >= 30 && method <= 39) {
 		delta = method - 29;
-		goto delta;
+		goto ultra;
 	} else if (method >= 40 && method <= 49) {
 		delta = method - 39;
-		goto delta;
+		goto ultra;
 	} else if (method >= 21 && method <= 29) {
 		delta = 1;
-		goto delta;
+		goto ultra;
 	} else if (method == 80) {
 		uc2->message = "Turbo compression not implemented";
 		ret = UC2_Unimplemented;
 	}
-	diag("Decompressor end\n");
-	return ret;
-
-delta:;
-	struct delta_writer_ctx dw_context;
-	delta_writer_init(uc2, &dw_context, wr, delta);
-	struct writer delta_wr = {.write = delta_write, .context = &dw_context};
-	ret = decompressor_ultra(uc2, master, delta, rd, &delta_wr, len, csum);
-	delta_writer_destroy(uc2, &dw_context);
 	diag("Decompressor end\n");
 	return ret;
 }
@@ -1184,7 +1157,7 @@ static unsigned cbuf_space(struct cbuffer *cb)
 	return 0x10000 - cbuf_have(cb) - 1;
 }
 
-static int cbuf_flush(struct writer *wr, struct cbuffer *cb)
+static int cbuf_flush(struct writer *wr, struct cbuffer *cb, struct delta *db, u8 *dbuf)
 {
 	for (;;) {
 		unsigned n = cbuf_have(cb);
@@ -1197,6 +1170,10 @@ static int cbuf_flush(struct writer *wr, struct cbuffer *cb)
 		}
 		u8 *p = cb->data + cb->head;
 		csum_update(&cb->csum, p, n);
+		if (dbuf) {
+			delta_revert(db, dbuf, p, n);
+			p = dbuf;
+		}
 		int r = wr->write(wr->context, p, n);
 		if (r < 0)
 			return r;
@@ -1370,7 +1347,6 @@ static int ht_dec(u8 lengths[NumSymbols], struct dcinfo *dc, struct bits *bi, u3
 	return 0;
 }
 
-
 static int ht_mktree(u32 table[LookupSize], const u8 *lengths, int nlit, int ncodes, const u32 *codes)
 {
 	int nsym = nlit + ncodes;
@@ -1413,7 +1389,12 @@ struct ultra {
 };
 
 static int decode_ht(struct ultra *ultra);
-static int decompress_block(struct ultra *ultra, struct writer *wr);
+static int decompress_block(struct ultra *ultra);
+
+enum {
+	End,
+	Flush
+};
 
 static int decompressor_ultra(struct uc2_context *uc2, unsigned master, unsigned delta, struct reader *rd, struct writer *wr, unsigned limit, u16 *csum)
 {
@@ -1433,31 +1414,43 @@ static int decompressor_ultra(struct uc2_context *uc2, unsigned master, unsigned
 	ultra->cb.head = ultra->cb.tail = ret;
 	csum_init(&ultra->cb.csum);
 
-	if (delta && master != SuperMaster) {
-		struct delta db;
-		diag("applying delta %d\n", delta);
+	u8 *dbuf = 0;
+	struct delta db;
+	if (delta) {
+		if (master != SuperMaster) {
+			delta_init(&db, delta);
+			delta_apply(&db, ultra->cb.data, ultra->cb.tail);
+		}
+		dbuf = u_alloc(uc2, sizeof ultra->cb.data);
+		ret = UC2_UserFault;
+		if (!dbuf)
+			goto ret;
 		delta_init(&db, delta);
-		delta_apply(&db, ultra->cb.data, ultra->cb.tail);
 	}
-
 
 	ret = bits_init(&ultra->bi, rd);
 	if (ret < 0)
-		goto ret;
+		goto ret2;
 
 	dc_init(&ultra->dc);
 	for (;;) {
 		ret = decode_ht(ultra);
 		if (ret <= 0)
 			break;
-		ret = decompress_block(ultra, wr);
-		if (ret)
-			break;
+		for (;;) {
+			int o = decompress_block(ultra);
+			ret = cbuf_flush(wr, &ultra->cb, &db, dbuf);
+			if (ret < 0)
+				goto ret2;
+			if (o != Flush)
+				break;
+		}
 	}
-	ret = cbuf_flush(wr, &ultra->cb);
 	bits_destroy(&ultra->bi);
 	if (csum)
 		*csum = csum_get(&ultra->cb.csum);
+ret2:
+	u_free(uc2, dbuf);
 ret:
 	u_free(uc2, ultra);
 	return ret;
@@ -1505,11 +1498,11 @@ static int decode_ht(struct ultra *ultra)
 	return ret;
 }
 
-static int decompress_block(struct ultra *ultra, struct writer *wr)
+static int decompress_block(struct ultra *ultra)
 {
 	const unsigned EOB_MARK = 125*512+1;
 
-	for (;;) {
+	do {
 		int c = huff(ultra->bd_table, &ultra->bi);
 		if (c < 0)
 			return c;
@@ -1525,27 +1518,23 @@ static int decompress_block(struct ultra *ultra, struct writer *wr)
 			if (c < 0)
 				return c;
 
-			if (dist == EOB_MARK) {
-				diag("EOB_MARK\n");
-				break;
-			}
+			if (dist == EOB_MARK)
+				return End;
 
 			unsigned len = c & 0xffff;
 			c = c >> 20 & 0xf;
 			if (c)
 				len += bits_get(&ultra->bi, c);
+			assert(cbuf_space(&ultra->cb) >= len);
 			do {
 				ultra->cb.data[ultra->cb.tail] = ultra->cb.data[(u16)(ultra->cb.tail - dist)];
 				ultra->cb.tail++;
 			} while (--len);
 		}
 
-		if (cbuf_space(&ultra->cb) < 35482) {
-			int ret = cbuf_flush(wr, &ultra->cb);
-			if (ret) return ret;
-		}
-	}
-	return 0;
+	} while (cbuf_space(&ultra->cb) >= 35482);
+
+	return Flush;
 }
 
 /* public */
