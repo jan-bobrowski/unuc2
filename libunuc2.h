@@ -14,6 +14,17 @@
  uc2_extract - decompress file
  uc2_message - get error message
  uc2_close - free resources
+
+ uc2_open
+ repeat {
+  uc2_read_cdir
+  if UC2_End
+   optionally uc2_cdir_finish
+  else while UC2_TaggedEntry
+   uc2_get_tag_header
+   uc2_get_tag_data if not skipped
+ }
+ uc2_close
 */
 
 struct uc2_io;     // User callbacks

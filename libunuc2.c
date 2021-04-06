@@ -799,8 +799,8 @@ int uc2_read_cdir(struct uc2_context *uc2, struct uc2_entry *e)
 		}
 	}
 ret:
-	cdir_fifo_destroy(uc2);
 	uc2->cdir_state = Initial;
+	cdir_fifo_destroy(uc2);
 	return ret;
 }
 
@@ -816,12 +816,23 @@ static int scan_start(struct uc2_context *uc2)
 		return ret;
 
 	if (!uc2_identify(&h, sizeof h)) {
+not_uc2:
 		uc2->message = "Not an UC2 archive";
 		return UC2_Damaged;
 	}
 
+	int ver = get16(h.xhead.versionNeededToExtract);
+
 	diag("Cdir offset:%u made:%d need:%d\n", get32(h.xhead.cdir.offset),
-	 get16(h.xhead.versionMadeBy), get16(h.xhead.versionNeededToExtract));
+	 get16(h.xhead.versionMadeBy), ver);
+
+
+	if (ver >= 203) {
+		if (ver > 203)
+			goto not_uc2;
+		uc2->message = "PCP not implemented";
+		return UC2_Unimplemented;
+	}
 
 	{
 		REC(COMPRESS) c;
@@ -1005,8 +1016,11 @@ int uc2_finish_cdir(struct uc2_context *uc2, char label[12])
 		label[p - t.xtail.label] = 0;
 	}
 
-	cdir_fifo_destroy(uc2);
+	if (!list_empty(&uc2->cdir_buf.list))
+		diag("Data in CDIR left\n");
+
 	uc2->cdir_state = Initial;
+	cdir_fifo_destroy(uc2);
 	return 0;
 }
 
@@ -1580,10 +1594,10 @@ const char *uc2_message(struct uc2_context *uc2, int ret)
 		static const char *tab[] = {
 			[~UC2_UserFault] = "Callback fault",
 			[~UC2_BadState] = "Bad state",
-			[~UC2_Damaged] = "Archive damaged",
+			[~UC2_Damaged] = "Damaged archive",
 			[~UC2_Truncated] = "Truncated",
 			[~UC2_Unimplemented] = "Unimplemented",
-			[~UC2_InternalError] = "Internal Error"
+			[~UC2_InternalError] = "Internal error"
 		};
 		if (~ret >= 0) {
 			if (~ret < elemof(tab))

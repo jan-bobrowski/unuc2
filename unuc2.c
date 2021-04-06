@@ -74,15 +74,16 @@ static void my_warn(void *ctx, char *f, ...)
 
 static void uc2err(uc2_handle uc2, int err, char *f, ...)
 {
-	fprintf(stderr, "%s: ", opt.archive);
+	fprintf(stderr, "%s", opt.archive);
 	if (f) {
+		fprintf(stderr, " (");
 		va_list ap;
 		va_start(ap, f);
 		vfprintf(stderr, f, ap);
 		va_end(ap);
-		fprintf(stderr, ": ");
+		fprintf(stderr, ")");
 	}
-	fprintf(stderr, "%s\n", uc2_message(uc2, err));
+	fprintf(stderr, ": %s\n", uc2_message(uc2, err));
 }
 
 static struct uc2_io io = {
@@ -356,11 +357,11 @@ static void set_attrs(char *path, struct node *ne)
 	if (dt) {
 		struct tm tm = {
 			.tm_year = 80 + (dt>>25),
-			.tm_mon = (dt>>21&15) - 1,
-			.tm_mday = dt>>16&31,
-			.tm_hour = dt>>11&31,
-			.tm_min = dt>>5&63,
-			.tm_sec = dt<<1&62,
+			.tm_mon = (dt>>21 & 15) - 1,
+			.tm_mday = dt>>16 & 31,
+			.tm_hour = dt>>11 & 31,
+			.tm_min = dt>>5 & 63,
+			.tm_sec = dt<<1 & 62,
 			.tm_isdst = -1
 		};
 		t = mktime(&tm);
@@ -396,7 +397,7 @@ static bool pipe_cb(struct node *ne, void *ctx, enum cause cause)
 			printf("Testing %s %u bytes\n", e->name, e->size);
 		int ret = uc2_extract(uc2, &e->xi, e->size, write_file, opt.test ? 0 : stdout);
 		if (ret < 0)
-			uc2err(uc2, ret, "(%s)", e->name);
+			uc2err(uc2, ret, "%s", e->name);
 	}
 	return true;
 }
@@ -431,7 +432,7 @@ static bool extract_cb(struct node *ne, void *ctx, enum cause cause)
 				err(EXIT_FAILURE, "%s", path->buffer);
 			int ret = uc2_extract(path->uc2, &e->xi, e->size, write_file, f);
 			if (ret < 0)
-				uc2err(path->uc2, ret, "(%s)", e->name);
+				uc2err(path->uc2, ret, "%s", e->name);
 			fclose(f);
 			if (!opt.no_file_meta)
 				set_attrs(path->buffer, ne);
