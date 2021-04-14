@@ -528,7 +528,7 @@ usage:
 					" -f      Overwrite\n"
 					" -p      To stdout\n"
 					" -D      Do not set time and permissions of dirs (also files: -DD)\n"
-					" -T      Tab separated\n"
+					" -T      Tab-separated\n"
 					"\nhttp://torinak.com/~jb/unuc2/\n"
 				);
 			return opt.help ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -552,7 +552,7 @@ usage:
 		if (!ne) err(EXIT_FAILURE, 0);
 
 		int ret = uc2_read_cdir(uc2, &ne->entry);
-		if (ret <= 0) {
+		if (ret < 0 || ret == UC2_End) {
 			free(ne);
 			if (ret == UC2_End)
 				break;
@@ -561,14 +561,10 @@ usage:
 		}
 
 		while (ret == UC2_TaggedEntry) {
-			char tag[16];
-			ret = uc2_get_tag_header(uc2, &ne->entry, tag);
-			if (ret < 0) {
-				uc2err(uc2, ret, 0);
-				return EXIT_FAILURE;
-			}
-			char data[ret];
-			ret = uc2_get_tag_data(uc2, &ne->entry, data);
+			char *tag;
+			void *data;
+			unsigned size;
+			ret = uc2_get_tag(uc2, &ne->entry, &tag, &data, &size);
 			if (ret < 0) {
 				uc2err(uc2, ret, 0);
 				return EXIT_FAILURE;

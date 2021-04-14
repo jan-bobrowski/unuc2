@@ -1,7 +1,7 @@
 # gmake
 
 NAME = unuc2
-VERSION = 0.4
+VERSION = 0.5
 BINDIR = /usr/local/bin
 
 CFLAGS += -DNDEBUG -Os

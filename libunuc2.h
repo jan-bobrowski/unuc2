@@ -8,8 +8,7 @@
  uc2_identify - check UC2 magic
  uc2_open - initialize
  uc2_read_cdir - read dir entry
- uc2_get_tag_header - read tag header of the entry
- uc2_get_tag_data - read tag data
+ uc2_get_tag - read tag
  uc2_finish_cdir - get archive label
  uc2_extract - decompress file
  uc2_message - get error message
@@ -19,10 +18,9 @@
  repeat {
   uc2_read_cdir
   if UC2_End
-   optionally uc2_cdir_finish
+   optionally uc2_finish_cdir
   else while UC2_TaggedEntry
-   uc2_get_tag_header
-   uc2_get_tag_data if not skipped
+    uc2_get_tag
  }
  uc2_close
 */
@@ -40,7 +38,7 @@ UC2_API uc2_handle uc2_close(uc2_handle);
 /* Get cdir entry. Pass NULL to skip the rest. Returns:
      UC2_End: The end, entry not filled,
      UC2_BareEntry: New entry filled, no tags,
-     UC2_TaggedEntry: New entry filled, has tags (must call uc2_get_tag_header),
+     UC2_TaggedEntry: New entry filled, has tags (must call uc2_get_tag),
      Negative value on error.
    Directories come before content. Duplicates: older first. */
 UC2_API int uc2_read_cdir(
@@ -48,21 +46,16 @@ UC2_API int uc2_read_cdir(
 	struct uc2_entry * // Entry to fill. Pass NULL to finish early.
 );
 
-/* Returns size of tag data to read, or negative on error */
-UC2_API int uc2_get_tag_header(
-	uc2_handle,
-	struct uc2_entry *, // to fill name, if skipping tags
-	char tag[16] // to fill, pass NULL to skip tags
-);
-
-/* If there are more tags returns UC2_TaggedEntry, else UC2_End, or an error */
-UC2_API int uc2_get_tag_data(
+/* Returns UC2_End, if final tag, UC2_TaggedEntry, if more, or negative on error */
+UC2_API int uc2_get_tag(
 	uc2_handle,
 	struct uc2_entry *, // to fill name
-	void *data // to fill, not NULL
+	char **tag, // char[16], pass NULL to skip tags
+	void **data,
+	unsigned *data_len
 );
 
-UC2_API int uc2_cdir_finish(
+UC2_API int uc2_finish_cdir(
 	uc2_handle,
 	char label[12]
 );
@@ -77,7 +70,6 @@ UC2_API int uc2_extract(
 	void *context
 );
 
-UC2_API int uc2_finish_cdir(uc2_handle, char label[12]);
 UC2_API const char *uc2_message(uc2_handle, int ret);
 
 struct uc2_io {
