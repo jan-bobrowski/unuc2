@@ -1,7 +1,7 @@
 # gmake
 
 NAME = unuc2
-VERSION = 0.5
+VERSION = 0.6
 BINDIR = /usr/local/bin
 
 CFLAGS += -DNDEBUG -Os
@@ -36,5 +36,6 @@ install: $(O)unuc2$(EXE)
 
 .PHONY: clean
 clean:
-	rm -f $(O)unuc2$(EXE) $(O)unuc2.o $(O)libunuc2.a $(O)libunuc2.so $(O)libunuc2.o $(O)super.o
+	$(RM) $(O)unuc2$(EXE) $(O)unuc2.o $(O)libunuc2.a $(O)libunuc2.so $(O)libunuc2.o $(O)super.o
+	@$(CLEAN)
 

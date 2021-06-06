@@ -45,7 +45,7 @@ typedef struct u16le {u8 b[2];} u16le;
 typedef struct u32le {u8 b[4];} u32le;
 
 static u16 get16(u16le v) {return v.b[0] | v.b[1]<<8;}
-static u32 get32(u32le v) {return v.b[0] | v.b[1]<<8 | v.b[2]<<16 | v.b[3]<<24;}
+static u32 get32(u32le v) {return v.b[0] | v.b[1]<<8 | v.b[2]<<16 | (u32)v.b[3]<<24;}
 
 #define REC(R) struct R
 
@@ -186,10 +186,9 @@ struct uc2_context {
 
 	u8 *cdir_buf;
 	struct range cdir_range;
-	unsigned cdir_size;
 
 	enum {
-		Initial,
+		Start,
 		AtEntry,
 		AtTag,
 		AtTail
@@ -639,36 +638,86 @@ static int use_master(struct uc2_context *uc2, u8 buffer[65535], u32 id)
 
 /* cdir */
 
-static int scan_start(struct uc2_context *uc2);
+static int cdir_damaged(struct uc2_context *uc2);
+
+static int decompress_cdir(struct uc2_context *uc2, u32 offset, u16 csum)
+{
+	assert(!uc2->cdir_buf);
+
+	REC(COMPRESS) c;
+
+	int ret = u_read_all(uc2, offset, &c, sizeof c);
+	if (ret < 0)
+		return ret;
+	offset += sizeof c;
+
+	u32 master = get32(c.masterPrefix);
+	if (master != NoMaster)
+		return cdir_damaged(uc2);
+
+	enum {
+		Prealloc = 0x4000
+	};
+
+	unsigned size = Prealloc;
+	for (;;) {
+		uc2->cdir_buf = u_alloc(uc2, size);
+		if (!uc2->cdir_buf)
+			return UC2_UserFault;
+
+		struct archive_ctx ar = {.offset = offset, .uc2 = uc2};
+		struct reader rd = {.read = archive_read, .context = &ar};
+		struct range wrctx = {.ptr = uc2->cdir_buf, .end = uc2->cdir_buf + size};
+		struct writer wr = {.write = buf_write, .context = &wrctx};
+		u16 cs;
+		ret = decompressor(uc2, get16(c.method), &rd, &wr, NoMaster, 100000000, &cs);
+		if (ret < 0)
+			return ret;
+
+		if (cs != csum)
+			return cdir_damaged(uc2);
+
+		if ((unsigned)ret <= size)
+			break;
+
+		diag("Decompressing Cdir again (size:%u < %d)\n", size, ret);
+		size = ret;
+		uc2->cdir_buf = u_free(uc2, uc2->cdir_buf);
+	}
+
+	uc2->cdir_range.end = uc2->cdir_buf + size;
+	return 0;
+}
+
+static int start_read(struct uc2_context *uc2);
 static int read_entry(struct uc2_context *uc2, struct uc2_entry *e, u8 type);
 static void copy_dos_name(u8 *dos_name, u8 *s);
-static int cdir_damaged(struct uc2_context *uc2);
 
 int uc2_read_cdir(struct uc2_context *uc2, struct uc2_entry *e)
 {
 	int ret;
 
-	if (uc2->cdir_state != AtEntry) {
-		if (uc2->cdir_buf)
-			return UC2_UserFault;
-		ret = scan_start(uc2);
-		if (ret < 0)
-			return ret;
+	if (uc2->cdir_state == Start) {
+		if (!uc2->cdir_buf) {
+			ret = start_read(uc2);
+			if (ret < 0)
+				return ret;
+		}
+
+		uc2->cdir_range.ptr = uc2->cdir_buf;
 		uc2->cdir_state = AtEntry;
 	}
 
 	for (;;) {
 		REC(OHEAD) *oh = range_get(&uc2->cdir_range, sizeof *oh);
-		if (!oh) {
-			ret = UC2_Truncated;
-			goto ret;
-		}
+		if (!oh)
+			return UC2_Truncated;
 		switch (oh->type) {
 		case FileEntry:
 		case DirEntry:
 			ret = read_entry(uc2, e, oh->type);
 			if (ret < 0)
-				goto ret;
+				return ret;
 			if (ret > UC2_BareEntry)
 				uc2->cdir_state = AtTag;
 			if (e)
@@ -685,22 +734,16 @@ int uc2_read_cdir(struct uc2_context *uc2, struct uc2_entry *e)
 				REC(COMPRESS) c;
 				REC(LOCATION) l;
 			} *m = range_get(&uc2->cdir_range, sizeof *m);
-			if (!m) {
-				ret = UC2_Truncated;
-				goto ret;
-			}
+			if (!m)
+				return UC2_Truncated;
 			if (uc2->scanned)
 				break;
-			if (get32(m->l.volume) != 1) {
-				ret = UC2_Unimplemented;
-				goto ret;
-			}
+			if (get32(m->l.volume) != 1)
+				return UC2_Unimplemented;
 
 			struct master_info *mi = u_alloc(uc2, sizeof *mi);
-			if (!mi) {
-				ret = UC2_UserFault;
-				goto ret;
-			}
+			if (!mi)
+				return UC2_UserFault;
 			mi->id = get32(m->m.index);
 			mi->size = get16(m->m.length);
 			mi->offset = get32(m->l.offset);
@@ -722,95 +765,9 @@ int uc2_read_cdir(struct uc2_context *uc2, struct uc2_entry *e)
 			return UC2_End;
 
 		default:
-			ret = cdir_damaged(uc2);
-			goto ret;
+			return cdir_damaged(uc2);
 		}
 	}
-ret:
-	uc2->cdir_state = Initial;
-	uc2->cdir_buf = u_free(uc2, uc2->cdir_buf);
-	return ret;
-}
-
-static int scan_start(struct uc2_context *uc2)
-{
-	int ret = 0;
-	struct {
-		REC(FHEAD) fhead;
-		REC(XHEAD) xhead;
-	} h;
-	ret = u_read_all(uc2, 0, &h, sizeof h);
-	if (ret < 0)
-		return ret;
-
-	if (!uc2_identify(&h, sizeof h)) {
-not_uc2:
-		uc2->message = "Not an UC2 archive";
-		return UC2_Damaged;
-	}
-
-	int ver = get16(h.xhead.versionNeededToExtract);
-
-	diag("Cdir offset:%u made:%d need:%d\n", get32(h.xhead.cdir.offset),
-	 get16(h.xhead.versionMadeBy), ver);
-
-
-	if (ver >= 203) {
-		if (ver > 203)
-			goto not_uc2;
-		uc2->pcp = 1;
-	}
-
-	REC(COMPRESS) c;
-	u32 offset;
-	u16 method;
-
-	offset = get32(h.xhead.cdir.offset);
-	ret = u_read_all(uc2, offset, &c, sizeof c);
-	if (ret < 0)
-		return ret;
-	offset += sizeof c;
-
-	u32 master = get32(c.masterPrefix);
-	if (master != NoMaster)
-		return cdir_damaged(uc2);
-	method = get16(c.method);
-
-	enum {
-		Prealloc = 0x10000
-	};
-	assert(!uc2->cdir_buf);
-
-	for (;;) {
-		unsigned size = uc2->cdir_size ? uc2->cdir_size : Prealloc;
-		uc2->cdir_buf = u_alloc(uc2, size);
-		if (!uc2->cdir_buf)
-			return UC2_UserFault;
-
-		struct archive_ctx ar = {.offset = offset, .uc2 = uc2};
-		struct reader rd = {.read = archive_read, .context = &ar};
-		struct range wrctx = {.ptr = uc2->cdir_buf, .end = uc2->cdir_buf + size};
-		struct writer wr = {.write = buf_write, .context = &wrctx};
-		u16 csum;
-		ret = decompressor(uc2, method, &rd, &wr, NoMaster, 100000000, &csum);
-		if (ret < 0)
-			return ret;
-
-		if (get16(h.xhead.fletch) != csum)
-			return cdir_damaged(uc2);
-
-		if (uc2->cdir_size)
-			break;
-		diag("Decompressing Cdir again (size:%d)\n", ret);
-		uc2->cdir_size = ret;
-		if (uc2->cdir_size <= Prealloc)
-			break;
-		uc2->cdir_buf = u_free(uc2, uc2->cdir_buf);
-	}
-
-	uc2->cdir_range.ptr = uc2->cdir_buf;
-	uc2->cdir_range.end = uc2->cdir_buf + uc2->cdir_size;
-	return ret;
 }
 
 static int read_entry(struct uc2_context *uc2, struct uc2_entry *e, u8 type)
@@ -935,8 +892,6 @@ int uc2_finish_cdir(struct uc2_context *uc2, char label[12])
 		label[p - t->xtail.label] = 0;
 	}
 
-	uc2->cdir_state = Initial;
-	uc2->cdir_buf = u_free(uc2, uc2->cdir_buf);
 	return 0;
 }
 
@@ -1466,6 +1421,40 @@ static int decompress_block(struct ultra *ultra)
 	return More;
 }
 
+/* initial */
+
+static int start_read(struct uc2_context *uc2)
+{
+	int ret = 0;
+	struct {
+		REC(FHEAD) fhead;
+		REC(XHEAD) xhead;
+	} h;
+	ret = u_read_all(uc2, 0, &h, sizeof h);
+	if (ret < 0)
+		return ret;
+
+	if (!uc2_identify(&h, sizeof h)) {
+not_uc2:
+		uc2->message = "Not an UC2 archive";
+		return UC2_Damaged;
+	}
+
+	int ver = get16(h.xhead.versionNeededToExtract);
+
+	diag("Cdir offset:%u made:%d need:%d\n",
+	 get32(h.xhead.cdir.offset), get16(h.xhead.versionMadeBy), ver);
+
+
+	if (ver >= 203) {
+		if (ver > 203)
+			goto not_uc2;
+		uc2->pcp = 1;
+	}
+
+	return decompress_cdir(uc2, get32(h.xhead.cdir.offset), get16(h.xhead.fletch));
+}
+
 /* public */
 
 struct uc2_context *uc2_open(struct uc2_io *io, void *io_ctx)
@@ -1476,9 +1465,8 @@ struct uc2_context *uc2_open(struct uc2_io *io, void *io_ctx)
 		uc2->io = io;
 		uc2->io_ctx = io_ctx;
 		uc2->supermaster = 0;
-		uc2->cdir_size = 0;
 		uc2->cdir_buf = 0;
-		uc2->cdir_state = Initial;
+		uc2->cdir_state = Start;
 		uc2->scanned = 0;
 		uc2->pcp = 0;
 		list_init(&uc2->masters);
@@ -1493,12 +1481,11 @@ struct uc2_context *uc2_close(struct uc2_context *uc2)
 		while (l != &uc2->masters) {
 			struct master_info *mi = list_item(l, struct master_info, list);
 			l = l->next;
-			if (mi->data)
-				u_free(uc2, mi->data);
+			u_free(uc2, mi->data);
 			u_free(uc2, mi);
 		}
-		if (uc2->supermaster)
-			u_free(uc2, uc2->supermaster);
+		u_free(uc2, uc2->supermaster);
+		u_free(uc2, uc2->cdir_buf);
 		uc2 = u_free(uc2, uc2);
 	}
 	return uc2;

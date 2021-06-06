@@ -29,8 +29,8 @@
 
 #include "list.h"
 #define endof(T) (T + sizeof T/sizeof*T)
-#define STR(S) _STR(S)
-#define _STR(S) #S
+#define STR(S) STR_(S)
+#define STR_(S) #S
 
 struct options {
 	bool list:1;

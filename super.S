@@ -1,14 +1,12 @@
-#define _ 1
-#if __USER_LABEL_PREFIX__ + 0
-#define label(N) _##N
-#else
-#define label(N) N
-#endif
+#define concat_(A,B) A##B
+#define concat(A,B) concat_(A,B)
+#define symbol(N) concat(__USER_LABEL_PREFIX__,N)
 
-.global label(uc2_supermaster_compressed)
-.global label(uc2_supermaster_compressed_end)
+.global symbol(uc2_supermaster_compressed)
+.global symbol(uc2_supermaster_compressed_end)
 
 .data
-label(uc2_supermaster_compressed):
+.align 1
+symbol(uc2_supermaster_compressed):
 .incbin "super.bin"
-label(uc2_supermaster_compressed_end):
+symbol(uc2_supermaster_compressed_end):
