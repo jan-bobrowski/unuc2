@@ -21,8 +21,11 @@ $(O)libunuc2.so: libunuc2.c $(O)super.o
 $(O)libunuc2.o: libunuc2.c Makefile list.h libunuc2.h $(DEPS)
 	$(CC) -c $(CFLAGS) $< -o $@
 
-$(O)super.o: super.S super.bin
-	$(CC) -c $(CFLAGS) $< -o $@
+$(O)super.o: $(I)super.bin
+	$(X)ld -r -b binary \
+	 --defsym $(decorsym)uc2_supermaster_compressed=$(or $(supersym),_binary_super_bin)_start \
+	 --defsym $(decorsym)uc2_supermaster_compressed_end=$(or $(supersym),_binary_super_bin)_end \
+	 -o $@ $(I)super.bin
 
 $(O)unuc2.o: unuc2.c Makefile
 	$(CC) -c $(CFLAGS) $< -o $@
@@ -38,4 +41,3 @@ install: $(O)unuc2$(EXE)
 clean:
 	$(RM) $(O)unuc2$(EXE) $(O)unuc2.o $(O)libunuc2.a $(O)libunuc2.so $(O)libunuc2.o $(O)super.o
 	@$(CLEAN)
-
