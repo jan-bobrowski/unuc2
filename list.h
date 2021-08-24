@@ -8,6 +8,8 @@ typedef struct list {
 	struct list *next, *prev;
 } list_t;
 
+#define list_item(L, T, M) ((T*)((char*)(1 ? (L) : (struct list *)0) - offsetof(T,M)))
+
 static inline void list_link(struct list *prev, struct list *next)
 {
 	prev->next = next;
@@ -55,9 +57,6 @@ static inline int list_is_empty(struct list *head)
 {
 	return head->next == head;
 }
-#define list_empty(H) list_is_empty(H)
-
-#define list_item(L, T, M) ((T*)((char*)(1?(L):&((T*)0)->M) - offsetof(T,M)))
 
 /* remove first element and return it */
 static inline struct list *list_get(struct list *head)

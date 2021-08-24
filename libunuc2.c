@@ -44,8 +44,8 @@ typedef uint32_t u32;
 typedef struct u16le {u8 b[2];} u16le;
 typedef struct u32le {u8 b[4];} u32le;
 
-static u16 get16(u16le v) {return v.b[0] | v.b[1]<<8;}
-static u32 get32(u32le v) {return v.b[0] | v.b[1]<<8 | v.b[2]<<16 | (u32)v.b[3]<<24;}
+static u16 get16(u16le v) {return (u16)v.b[0] | (u16)v.b[1]<<8;}
+static u32 get32(u32le v) {return (u32)v.b[0] | (u32)v.b[1]<<8 | (u32)v.b[2]<<16 | (u32)v.b[3]<<24;}
 
 #define REC(R) struct R
 
@@ -1039,7 +1039,7 @@ static unsigned cbuf_have(struct cbuffer *cb)
 
 static unsigned cbuf_space(struct cbuffer *cb)
 {
-	return 0x10000 - cbuf_have(cb) - 1;
+	return sizeof cb->data - cbuf_have(cb) - 1;
 }
 
 static int cbuf_flush(struct writer *wr, struct cbuffer *cb, struct delta *db, u8 *dbuf)
@@ -1256,7 +1256,7 @@ static int ht_mktree(u32 table[LookupSize], const u8 *lengths, int nlit, int nco
 //	if (p != e)
 //		return UC2_Damaged;
 	while (p < e)
-		*p++ = 1<<24;
+		*p++ = 1 << 24;
 
 	return 0;
 }

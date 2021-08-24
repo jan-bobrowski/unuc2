@@ -10,7 +10,7 @@
  uc2_read_cdir - read dir entry
  uc2_get_tag - read tag
  uc2_finish_cdir - get archive label
- uc2_extract - decompress file
+ uc2_extract - decompress a file
  uc2_message - get error message
  uc2_close - free resources
 
@@ -31,7 +31,7 @@ struct uc2_entry;  // CDir entry
 struct uc2_context;
 typedef struct uc2_context *uc2_handle;
 
-UC2_API int uc2_identify(void *magic, unsigned magic_size /* 4..21 */);
+UC2_API int uc2_identify(void *magic, unsigned magic_size /* 4..21 */); // 1: This is UC2
 UC2_API uc2_handle uc2_open(struct uc2_io *io, void *io_ctx);
 UC2_API uc2_handle uc2_close(uc2_handle);
 

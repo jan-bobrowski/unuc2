@@ -167,7 +167,7 @@ static void print_time(unsigned t)
 	int w = 0;
 	if (t) {
 		w += printf("%04u-%02u-%02u %02u:%02u", 1980 + (t>>25), t>>21&15, t>>16&31, t>>11&31, t>>5&63);
-		int s = t<<1&62;
+		int s = t<<1 & 62;
 		if (s < 60)
 			w += printf(":%02u", s);
 	}
