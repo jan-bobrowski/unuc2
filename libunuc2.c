@@ -430,12 +430,12 @@ enum casechg {KeepCase, LowerCase};
 static u8 *put_utf8(u8 *d, u8 *e, enum casechg cc, u8 c)
 {
 	if (c < 128) {
-		if (d+1 > e) return 0;
+		if (d + 1 > e) return 0;
 		if (cc == LowerCase && c >= 'A' && c <= 'Z')
 			c += 'a' - 'A';
 	} else {
 		if (d+2 > e) return 0;
-		u16 u = (cc==LowerCase ? cp850_tolower : cp850)[c - 128];
+		u16 u = (cc == LowerCase ? cp850_tolower : cp850)[c - 128];
 		c = 0xC0;
 		if (u >= 0x800) {
 			if (d+3 > e) return 0;
@@ -979,9 +979,9 @@ int uc2_extract(
 	if (ret < 0)
 		return ret;
 
-	struct archive_ctx ar = {.offset=xi->offset, .uc2 = uc2};
+	struct archive_ctx ar = {.offset = xi->offset, .uc2 = uc2};
 	struct reader rd = {.read = archive_read, .context = &ar};
-	struct user_write_ctx uw_ctx = {.write=write, .context=context};
+	struct user_write_ctx uw_ctx = {.write = write, .context = context};
 	struct writer wr = {.write = user_write, .context = &uw_ctx};
 	u16 csum;
 	ret = decompressor(uc2, xi->method, &rd, &wr, xi->master, size, &csum);

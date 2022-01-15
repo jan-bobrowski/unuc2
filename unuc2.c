@@ -40,6 +40,7 @@ struct options {
 	bool overwrite:1;
 	bool no_dir_meta:1;
 	bool no_file_meta:1;
+	bool names_only:1;
 	bool help:1;
 	char sep;
 	char *archive;
@@ -213,8 +214,10 @@ static void match_pattern(char *p)
 				if (memcmp(q - 2, ";*", 2) == 0) {
 					version = -1;
 					q[-2] = 0;
-				} else if(isdigit(q[-1])) {
-					do q--; while (q - p > 2 && isdigit(q[-1]));
+				} else if (isdigit(q[-1])) {
+					do
+						q--;
+					while (q - p > 2 && isdigit(q[-1]));
 					if (q[-1] == ';') {
 						q[-1] = 0;
 						version = atoi(q);
@@ -268,7 +271,7 @@ enum cause {
 static int visit_selected(struct node *dir, bool (*cb)(struct node *, void *ctx, enum cause), void *ctx)
 {
 	int r = 1;
-	for (struct list *l=dir->children.next; l!=&dir->children; l=l->next) {
+	for (struct list *l = dir->children.next; l != &dir->children; l = l->next) {
 		struct node *ne = list_item(l, struct node, on_dir);
 		if (ne->entry.is_dir)
 			continue;
@@ -280,7 +283,7 @@ static int visit_selected(struct node *dir, bool (*cb)(struct node *, void *ctx,
 	}
 	if (!r)
 		return r;
-	for (struct list *l=dir->children.next; l!=&dir->children; l=l->next) {
+	for (struct list *l = dir->children.next; l != &dir->children; l = l->next) {
 		struct node *ne = list_item(l, struct node, on_dir);
 		if (!ne->entry.is_dir)
 			continue;
@@ -304,29 +307,37 @@ static int visit_selected(struct node *dir, bool (*cb)(struct node *, void *ctx,
 static void print_entry(struct node *ne, int size_w)
 {
 	struct uc2_entry *e = &ne->entry;
-	char t[] = "adlshr";
-	unsigned a = e->attr;
-	for (char *p = t; *p; p++, a<<=1)
-		if (!(a & 0x20))
-			*p = '-';
-	printf("%s", t);
-	putchar(opt.sep);
-	print_time(e->dos_time);
-	putchar(opt.sep);
-	if (opt.sep == ' ') {
-		if (e->is_dir) printf("%*s", size_w, "");
-		else printf("%*u", size_w, e->size);
-	} else
-		if (!e->is_dir) printf("%u", e->size);
-	putchar(opt.sep);
+	if (!opt.names_only) {
+		char t[] = "adlshr";
+		unsigned a = e->attr;
+		for (char *p = t; *p; p++, a<<=1)
+			if (!(a & 0x20))
+				*p = '-';
+		printf("%s", t);
+		putchar(opt.sep);
+		print_time(e->dos_time);
+		putchar(opt.sep);
+		if (opt.sep == ' ') {
+			if (e->is_dir)
+				printf("%*s", size_w, "");
+			else
+				printf("%*u", size_w, e->size);
+		} else {
+			if (!e->is_dir)
+				printf("%u", e->size);
+		}
+		putchar(opt.sep);
+	}
 	if (e->dirid)
 		print_dir_path(ne);
 	printf("%s", e->name);
-	if (e->is_dir && opt.sep == ' ')
-		putchar('/');
-	if (ne->version) {
-		putchar(opt.sep == ' ' ? ';' : opt.sep);
-		printf("%u", ne->version);
+	if (!opt.names_only) {
+		if (e->is_dir && opt.sep == ' ')
+			putchar('/');
+		if (ne->version) {
+			putchar(opt.sep == ' ' ? ';' : opt.sep);
+			printf("%u", ne->version);
+		}
 	}
 	putchar('\n');
 }
@@ -468,13 +479,15 @@ int main(int argc, char *argv[])
 		goto usage;
 
 	for (;;) {
-		int o = getopt(argc, argv, "xlatfd:C:cpDTh?");
+		int o = getopt(argc, argv, "xl1atfd:C:cpDTh?");
 		if (o == -1)
 			break;
 		switch (o) {
 		case 'x':
 			opt.list = opt.test = false;
 			break;
+		case '1':
+			opt.names_only = true;
 		case 'l':
 			opt.list = true;
 			break;
@@ -514,14 +527,14 @@ int main(int argc, char *argv[])
 usage:
 			printf(
 				"unuc2 [-afpDT] [-d destination] archive.uc2 [files]...\n"
-				"unuc2 -l [-aT] archive.uc2 [files]...\n"
+				"unuc2 -l [-a1T] archive.uc2 [files]...\n"
 				"unuc2 -t [-a] archive.uc2 [files]...\n"
 			);
 			if (!opt.help)
 				printf("unuc2 -h\n");
 			else
 				printf(
-					" -l      List\n"
+					" -l      List (names only: -1)\n"
 					" -t      Test\n"
 					" -a      All versions of files\n"
 					" -d path Destination to extract to\n"
@@ -605,7 +618,7 @@ usage:
 		if (opt.dest) {
 			unsigned n = strlen(opt.dest);
 			assert(n);
-			if (opt.dest[n-1] == '/')
+			if (opt.dest[n - 1] == '/')
 				n--;
 			if (n >= sizeof path.buffer)
 				errx(EXIT_FAILURE, "Destination too long");

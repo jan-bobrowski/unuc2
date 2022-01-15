@@ -8,8 +8,6 @@ that achieved much better compression than ZIP by combining similiar files.
 Original author was so kind to [publish source code](http://www.nicodevries.com/professional/)
 that made the library possible.
 
-Also at [~jb/unuc2](http://torinak.com/~jb/unuc2/).
-
 ## API
 
 * uc2_identify – check UC2 magic
@@ -21,4 +19,4 @@ Also at [~jb/unuc2](http://torinak.com/~jb/unuc2/).
 * uc2_message – get error message
 * uc2_close – free resources
 
-See [libunuc2.h] for details.
+See [libunuc2.h](blob/main/libunuc2.h) for details.
