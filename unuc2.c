@@ -138,11 +138,15 @@ static void new_entry(struct node *ne)
 			if (fe->entry.name_len == ne->entry.name_len
 			 && memcmp(fe->entry.name, ne->entry.name, ne->entry.name_len) == 0) {
 				fe->version++;
-				if (!at) at = &fe->on_dir;
+				if (!at)
+					at = &fe->on_dir;
 			}
 		}
 	}
-	list_append(at ? at : &dir->children, &ne->on_dir);
+	if (at)
+		list_insert_before(at, &ne->on_dir);
+	else
+		list_append(&dir->children, &ne->on_dir);
 	list_append(e->is_dir ? &dirs : &files, &ne->by_type);
 	list_init(&ne->children);
 	list_init(&ne->on_sel);
@@ -202,7 +206,7 @@ static void match_pattern(char *p)
 	};
 	struct list selected;
 	list_init(&selected);
-	list_add(&selected, &root.on_sel);
+	list_append(&selected, &root.on_sel);
 	int version = opt.all ? -1 : 0;
 	for (;;) {
 		char *q = strchr(p, '/');

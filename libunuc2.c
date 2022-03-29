@@ -756,7 +756,7 @@ int uc2_read_cdir(struct uc2_context *uc2, struct uc2_entry *e)
 				mi->com.master = SuperMaster;
 			mi->needed_by = 0;
 			mi->data = 0;
-			list_add(&uc2->masters, &mi->list);
+			list_append(&uc2->masters, &mi->list);
 			break;
 
 		case EndOfCdir:

@@ -19,4 +19,4 @@ that made the library possible.
 * uc2_message – get error message
 * uc2_close – free resources
 
-See [libunuc2.h](blob/main/libunuc2.h) for details.
+See [libunuc2.h](libunuc2.h) for details.
