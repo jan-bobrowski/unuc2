@@ -546,7 +546,7 @@ usage:
 					" -p      To stdout\n"
 					" -D      Do not set time and permissions of dirs (also files: -DD)\n"
 					" -T      Tab-separated\n"
-					"\nhttp://torinak.com/~jb/unuc2/\n"
+					"\ntorinak.com/~jb/unuc2/\n"
 				);
 			return opt.help ? EXIT_SUCCESS : EXIT_FAILURE;
 		}

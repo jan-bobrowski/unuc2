@@ -18,15 +18,16 @@ static inline int list_is_empty(struct list *head)
 	return head->next == head;
 }
 
-static inline void list_del(struct list *item)
+static inline struct list *list_del(struct list *item)
 {
 	struct list *next = item->next;
 	struct list *prev = item->prev;
 	next->prev = prev;
 	prev->next = next;
 #ifndef NDEBUG
-	item->next = item->prev = (void*)0xaa;
+	item->next = item->prev = (void *)0xaa;
 #endif
+	return next;
 }
 
 static inline void list_insert_after(struct list *prev, struct list *item)

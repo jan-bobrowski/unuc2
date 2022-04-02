@@ -1,7 +1,7 @@
 # gmake
 
 NAME = unuc2
-VERSION = 0.6.2
+VERSION = 0.7
 BINDIR = /usr/local/bin
 
 CFLAGS += -DNDEBUG -Os
@@ -32,6 +32,10 @@ $(O)unuc2.o: $(I)unuc2.c $(I)Makefile
 
 $(O)unuc2$(EXE): $(O)unuc2.o $(O)libunuc2.a
 	$(CC) $^ $(LDFLAGS) -o $@
+
+.PHONY: strip
+strip: $(O)unuc2$(EXE)
+	$(X)strip $(O)unuc2$(EXE)
 
 .PHONY: install
 install: $(O)unuc2$(EXE)
