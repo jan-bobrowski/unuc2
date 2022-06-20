@@ -1,10 +1,10 @@
 
 # unuc2
 
-Library for unpacking UC2 archives.
+Command-line utility and a library for unpacking UC2 archives.
 
-Ultra Compressor II is a compression utility from DOS era
-that achieved much better compression than ZIP by combining similiar files.
+Ultra Compressor II is a packer from DOS era that achieved much tighter
+compression than ZIP by combining similiar files.
 Original author was so kind to [publish source code](http://www.nicodevries.com/professional/)
 that made the library possible.
 

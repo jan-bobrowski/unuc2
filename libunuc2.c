@@ -1,5 +1,5 @@
 /* UltraCompressor II decompression library.
-   Copyright © Jan Bobrowski 2020, 2021
+   Copyright © Jan Bobrowski 2020–2022
    torinak.com/~jb/unuc2/
 
    This program is free software; you can redistribute it and
@@ -129,7 +129,6 @@ REC(XTAIL) {
  u8 label[11];	// MS-DOS volume label
 };
 
-#include "list.h"
 #define elemof(T) (sizeof T/sizeof*T)
 #define endof(T) (T+elemof(T))
 
@@ -176,13 +175,15 @@ struct range {
 
 static unsigned range_len(struct range *r) {return (unsigned)(r->end - r->ptr);}
 
+struct master_info;
+
 struct uc2_context {
 	char *message;
 	struct uc2_io *io;
 	void *io_ctx;
 
 	u8 *supermaster;
-	struct list masters;
+	struct master_info *masters;
 
 	u8 *cdir_buf;
 	struct range cdir_range;
@@ -452,7 +453,7 @@ static u8 *put_utf8(u8 *d, u8 *e, enum casechg cc, u8 c)
 
 static void copy_long_name(struct uc2_entry *e, u8 *s, u8 *se)
 {
-	u8 *d = (u8*)e->name;
+	u8 *d = (u8 *)e->name;
 	u8 *de = d + sizeof e->name - 1;
 	do {
 		u8 c = *s++;
@@ -465,12 +466,12 @@ static void copy_long_name(struct uc2_entry *e, u8 *s, u8 *se)
 			return;
 	} while (s < se);
 	*d = 0;
-	e->name_len = (unsigned short)(d - (u8*)e->name);
+	e->name_len = (unsigned short)(d - (u8 *)e->name);
 }
 
 static void assemble_name(struct uc2_entry *e)
 {
-	u8 *d = (u8*)e->name;
+	u8 *d = (u8 *)e->name;
 	u8 *s = e->dos_name;
 	u8 *z = s + 8;
 	for (;;) {
@@ -486,7 +487,7 @@ static void assemble_name(struct uc2_entry *e)
 		}
 		while (s < z) {
 			u8 c = *s++;
-			d = put_utf8(d, (u8*)e->name + sizeof e->name, LowerCase, c);
+			d = put_utf8(d, (u8 *)e->name + sizeof e->name, LowerCase, c);
 			assert(d);
 		}
 		s = e->dos_name + 8;
@@ -495,7 +496,7 @@ static void assemble_name(struct uc2_entry *e)
 		z = s + 3;
 	}
 	*d = 0;
-	e->name_len = (unsigned short)(d - (u8*)e->name);
+	e->name_len = (unsigned short)(d - (u8 *)e->name);
 }
 
 /* master */
@@ -519,20 +520,23 @@ struct master_info {
 	u16 size;
 	unsigned offset;
 	struct compress com;
-	struct list list;
+	struct master_info *next;
 	struct master_info *needed_by; // in resolve_master()
 	u8 *data;
 };
 
 static struct master_info *find_master(struct uc2_context *uc2, unsigned id)
 {
-	for (struct list *l = uc2->masters.next; l != &uc2->masters; l = l->next) {
-		struct master_info *mi = list_item(l, struct master_info, list);
+	for (struct master_info *mi = uc2->masters; mi; mi = mi->next) {
 		if (mi->id == id)
 			return mi;
 	}
 	return 0;
 }
+
+static const u8 supermaster_compressed[] = {
+#include SUPER_INC
+};
 
 static int resolve_master(struct uc2_context *uc2, unsigned master)
 {
@@ -546,8 +550,7 @@ static int resolve_master(struct uc2_context *uc2, unsigned master)
 		if (!uc2->supermaster)
 			return UC2_UserFault;
 
-		extern u8 uc2_supermaster_compressed[], uc2_supermaster_compressed_end[];
-		struct range br = {.ptr = uc2_supermaster_compressed, .end = uc2_supermaster_compressed_end};
+		struct range br = {.ptr = (u8 *)supermaster_compressed, .end = (u8 *)supermaster_compressed + sizeof supermaster_compressed};
 		struct range bw = {.ptr = uc2->supermaster, .end = uc2->supermaster + 49152};
 		struct reader rd = {.read = buf_read, .context = &br};
 		struct writer wr = {.write = buf_write, .context = &bw};
@@ -756,7 +759,8 @@ int uc2_read_cdir(struct uc2_context *uc2, struct uc2_entry *e)
 				mi->com.master = SuperMaster;
 			mi->needed_by = 0;
 			mi->data = 0;
-			list_append(&uc2->masters, &mi->list);
+			mi->next = uc2->masters;
+			uc2->masters = mi;
 			break;
 
 		case EndOfCdir:
@@ -1111,7 +1115,7 @@ enum {
 	NumLenCodes = NumDeltaCodes + NumExtraCodes,
 };
 
-const u8 vval[NumDeltaCodes][NumDeltaCodes] = {
+static const u8 vval[NumDeltaCodes][NumDeltaCodes] = {
 	{ 0,13,12,11,10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
 	{ 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13, 0},
 	{ 2, 1, 3, 4, 5, 6, 7, 8, 9,10,11,12,13, 0},
@@ -1469,7 +1473,7 @@ struct uc2_context *uc2_open(struct uc2_io *io, void *io_ctx)
 		uc2->cdir_state = Start;
 		uc2->scanned = 0;
 		uc2->pcp = 0;
-		list_init(&uc2->masters);
+		uc2->masters = 0;
 	}
 	return uc2;
 }
@@ -1477,10 +1481,10 @@ struct uc2_context *uc2_open(struct uc2_io *io, void *io_ctx)
 struct uc2_context *uc2_close(struct uc2_context *uc2)
 {
 	if (uc2) {
-		struct list *l = uc2->masters.next;
-		while (l != &uc2->masters) {
-			struct master_info *mi = list_item(l, struct master_info, list);
-			l = l->next;
+		struct master_info *e = uc2->masters;
+		while (e) {
+			struct master_info *mi = e;
+			e = e->next;
 			u_free(uc2, mi->data);
 			u_free(uc2, mi);
 		}

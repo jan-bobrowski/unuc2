@@ -1,5 +1,5 @@
 /* UltraCompressor II extraction tool.
-   Copyright © Jan Bobrowski 2020, 2021
+   Copyright © Jan Bobrowski 2020–2022
    torinak.com/~jb/unuc2/
 
    This program is free software: you can redistribute it and modify
@@ -17,7 +17,6 @@
 #include <time.h>
 #include <utime.h>
 #include <fnmatch.h>
-#include <getopt.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <errno.h>
@@ -32,6 +31,10 @@
 #define STR(S) STR_(S)
 #define STR_(S) #S
 
+#ifndef VERSION
+#warning VERSION not defined
+#endif
+
 struct options {
 	bool list:1;
 	bool all:1;
@@ -42,6 +45,7 @@ struct options {
 	bool no_file_meta:1;
 	bool names_only:1;
 	bool help:1;
+	bool verbose:1;
 	char sep;
 	char *archive;
 	char *dest;
@@ -383,10 +387,13 @@ static void set_attrs(char *path, struct node *ne)
 	}
 	if (t != (time_t)-1) {
 		struct utimbuf ut = {.actime = t, .modtime = t};
-		(void)utime(path, &ut);
+		if (utime(path, &ut) < 0 && opt.verbose)
+			warn("utime(%s)", path);
 	}
-	if (ne->entry.attr & UC2_Attr_R)
-		(void)chmod(path, 0444);
+	if (ne->entry.attr & UC2_Attr_R) {
+		if (chmod(path, 0444) < 0 && opt.verbose)
+			warn("chmod(%s)", path);
+	}
 }
 
 static int write_file(void *file, const void *ptr, unsigned len)
@@ -408,7 +415,7 @@ static bool pipe_cb(struct node *ne, void *ctx, enum cause cause)
 	if (cause == VisitFile) {
 		uc2_handle uc2 = ctx;
 		struct uc2_entry *e = &ne->entry;
-		if (opt.test)
+		if (opt.test && opt.verbose)
 			printf("Testing %s %u bytes\n", e->name, e->size);
 		int ret = uc2_extract(uc2, &e->xi, e->size, write_file, opt.test ? 0 : stdout);
 		if (ret < 0)
@@ -433,15 +440,14 @@ static bool extract_cb(struct node *ne, void *ctx, enum cause cause)
 
 		if (cause == VisitFile) {
 			*p = 0;
-			if (!opt.overwrite) {
-				if (access(path->buffer, F_OK) == 0) {
+			if (access(path->buffer, F_OK) == 0) {
+				if (!opt.overwrite) {
 					errno = EEXIST;
 					warn("%s", path->buffer);
 					break;
-				}
-			} else
-				(void) unlink(path->buffer);
-
+				} else if (unlink(path->buffer) < 0)
+					err(EXIT_FAILURE, "unlink(%s)", path->buffer);
+			}
 			FILE *f = fopen(path->buffer, "wb");
 			if (!f)
 				err(EXIT_FAILURE, "%s", path->buffer);
@@ -483,7 +489,7 @@ int main(int argc, char *argv[])
 		goto usage;
 
 	for (;;) {
-		int o = getopt(argc, argv, "xl1atfd:C:cpDTh?");
+		int o = getopt(argc, argv, "xl1atfd:C:cpDThv?");
 		if (o == -1)
 			break;
 		switch (o) {
@@ -522,6 +528,9 @@ int main(int argc, char *argv[])
 		case 'T':
 			opt.sep = '\t';
 			break;
+		case 'v':
+			opt.verbose = true;
+			break;
 		case '?':
 			if (optopt)
 				return EXIT_FAILURE;
@@ -546,14 +555,20 @@ usage:
 					" -p      To stdout\n"
 					" -D      Do not set time and permissions of dirs (also files: -DD)\n"
 					" -T      Tab-separated\n"
+					" -v      Be verbose / print version\n"
 					"\ntorinak.com/~jb/unuc2/\n"
 				);
 			return opt.help ? EXIT_SUCCESS : EXIT_FAILURE;
 		}
 	}
 
-	if (argc == optind)
-		errx(EXIT_FAILURE, "Archive not given");
+	if (argc == optind) {
+		if (!opt.verbose) // -v means version here
+			errx(EXIT_FAILURE, "Archive not given");
+		printf(STR(VERSION) "\n");
+		return EXIT_SUCCESS;
+	}
+
 	opt.archive = argv[optind++];
 
 	FILE *f = fopen(opt.archive, "rb");
